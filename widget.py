@@ -10,7 +10,7 @@ import urllib.parse
 import urllib.request
 import webbrowser
 from datetime import datetime
-from tkinter import BOTH, LEFT, RIGHT, X, Button, Canvas, Frame, Label, Menu, Tk
+from tkinter import BOTH, LEFT, RIGHT, X, Button, Canvas, Frame, Label, Menu, TclError, Tk
 from typing import Any
 
 
@@ -77,6 +77,7 @@ class MiniStockWidget:
         self.row_widgets: dict[str, dict[str, Any]] = {}
         self.compact_height = self.empty_height + self.control_height
         self.minimized = False
+        self.closing = False
         self.drag_offset = (0, 0)
         self.collapse_job: str | None = None
         self.expand_job: str | None = None
@@ -86,6 +87,7 @@ class MiniStockWidget:
         self.last_alert_id: int | None = None
 
         self._build_ui()
+        self.root.protocol("WM_DELETE_WINDOW", self._close)
         self._place_initially()
         self._bind_common(self.root)
         self._bind_common(self.shell)
@@ -94,6 +96,8 @@ class MiniStockWidget:
         self._bind_common(self.rows_frame)
         self.minimize_button.bind("<Enter>", self._on_enter, add="+")
         self.minimize_button.bind("<Leave>", self._on_leave, add="+")
+        self.close_button.bind("<Enter>", self._on_enter, add="+")
+        self.close_button.bind("<Leave>", self._on_leave, add="+")
         self.detail.bind("<Enter>", self._on_enter, add="+")
         self.detail.bind("<Leave>", self._on_leave, add="+")
         self.canvas.bind("<Configure>", lambda _event: self._draw_chart())
@@ -116,6 +120,23 @@ class MiniStockWidget:
             anchor="w",
         )
         self.control_title.pack(side=LEFT, padx=(7, 0))
+        self.close_button = Button(
+            self.control_bar,
+            text="×",
+            command=self._close,
+            bg="#0e1b18",
+            fg=MUTED,
+            activebackground="#4a2420",
+            activeforeground=UP,
+            bd=0,
+            relief="flat",
+            highlightthickness=0,
+            padx=6,
+            pady=0,
+            font=("Segoe UI", 9),
+            cursor="hand2",
+            takefocus=False,
+        )
         self.minimize_button = Button(
             self.control_bar,
             text="—",
@@ -133,6 +154,7 @@ class MiniStockWidget:
             cursor="hand2",
             takefocus=False,
         )
+        self.close_button.pack(side=RIGHT, fill="y")
         self.minimize_button.pack(side=RIGHT, fill="y")
         self.rows_frame = Frame(self.shell, bg=BG, cursor="fleur")
         self.rows_frame.pack(fill=X)
@@ -161,7 +183,7 @@ class MiniStockWidget:
         self.menu.add_command(label="下一只", command=lambda: self._cycle(1))
         self.menu.add_separator()
         self.menu.add_command(label="打开完整控制台", command=lambda: webbrowser.open(self.api_url))
-        self.menu.add_command(label="关闭悬浮窗", command=self.root.destroy)
+        self.menu.add_command(label="关闭悬浮窗", command=self._close)
 
     def _place_initially(self) -> None:
         self.root.update_idletasks()
@@ -199,6 +221,13 @@ class MiniStockWidget:
             pass
         self.root.overrideredirect(False)
         self.root.iconify()
+
+    def _close(self) -> None:
+        """Close only the floating widget; the monitoring backend keeps running."""
+        if self.closing:
+            return
+        self.closing = True
+        self.root.destroy()
 
     def _on_map(self, _event=None) -> None:
         if self.minimized:
@@ -299,18 +328,28 @@ class MiniStockWidget:
             return json.loads(response.read().decode("utf-8"))
 
     def _poll(self) -> None:
+        if self.closing:
+            return
         if not self.fetching:
             self.fetching = True
             threading.Thread(target=self._poll_worker, name="widget-status", daemon=True).start()
         self.root.after(round(self.poll_seconds * 1000), self._poll)
 
+    def _after_if_open(self, callback) -> None:
+        if self.closing:
+            return
+        try:
+            self.root.after(0, callback)
+        except (RuntimeError, TclError):
+            pass
+
     def _poll_worker(self) -> None:
         try:
             status = self._get_json("/api/status")
             alerts = self._get_json("/api/alerts?limit=100").get("alerts", [])
-            self.root.after(0, lambda: self._apply_status(status, alerts))
+            self._after_if_open(lambda: self._apply_status(status, alerts))
         except (OSError, ValueError, urllib.error.URLError):
-            self.root.after(0, self._show_disconnected)
+            self._after_if_open(self._show_disconnected)
         finally:
             self.fetching = False
 
@@ -520,7 +559,7 @@ class MiniStockWidget:
             payload = self._get_json("/api/trend?code=" + urllib.parse.quote(code), timeout=8.0)
         except (OSError, ValueError, urllib.error.URLError):
             payload = {"code": code, "points": [], "sources": [], "error": "分时数据暂不可用"}
-        self.root.after(0, lambda: self._apply_trend(payload))
+        self._after_if_open(lambda: self._apply_trend(payload))
 
     def _apply_trend(self, payload: dict) -> None:
         self.trend_loading = False
