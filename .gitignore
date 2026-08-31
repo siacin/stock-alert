@@ -1,0 +1,44 @@
+# Local environments and generated files
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+node_modules/
+dist/
+build/
+*.egg-info/
+
+# Personal configuration, credentials and runtime data
+config.json
+config.*.json
+!config.example.json
+data/
+.env
+.env.*
+!.env.example
+*.pending
+*.bak
+*.backup
+*.log
+*.db
+*.db-*
+*.sqlite*
+*.key
+*.pem
+*.pfx
+*.p12
+*.zip
+remote-access.json
+news-agent.json
+news-agent-result.json
+
+# Machine/editor metadata
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.codex/
+.agents/

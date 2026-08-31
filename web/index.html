@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="A 股自选股多数据源实时提醒控制台">
+  <title>盘中哨兵 · 多源行情提醒</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="ambient ambient-one"></div>
+  <div class="ambient ambient-two"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+      <div>
+        <p class="eyebrow">A-SHARE SIGNAL DESK</p>
+        <h1>盘中哨兵</h1>
+      </div>
+    </div>
+    <div class="header-actions">
+      <div id="clock" class="clock" aria-label="服务器时间">--:--:--</div>
+      <button id="refreshButton" class="button button-ghost" type="button">刷新行情</button>
+      <button id="settingsButton" class="button button-ghost" type="button">监控设置</button>
+      <button id="remoteButton" class="button button-ghost" type="button">手机连接</button>
+      <button id="monitorButton" class="button button-primary" type="button">启动监控</button>
+    </div>
+  </header>
+
+  <main class="page-shell">
+    <section id="connectionBar" class="connection-bar" aria-label="连接与同步状态">
+      <span id="connectionLabel">正在连接电脑后台…</span>
+      <small id="syncLabel">自选、监控和提醒自动同步</small>
+    </section>
+    <div id="syncConflict" class="sync-conflict" role="status" hidden>
+      <span>其他设备已经更新配置。本页修改已保留，尚未覆盖服务器；请记录所需修改后载入最新版本。</span>
+      <button id="reloadConfigButton" class="button button-secondary" type="button">载入最新配置</button>
+    </div>
+    <nav class="module-tabs" aria-label="功能模块">
+      <button class="module-tab active" type="button" data-view="monitor" aria-selected="true">
+        <span>盘中监控</span><small>行情与提醒</small>
+      </button>
+      <button class="module-tab" type="button" data-view="news" aria-selected="false">
+        <span>资讯雷达</span><small id="radarTabMeta">财经热点</small><i id="radarRelatedBadge" hidden>0</i>
+      </button>
+    </nav>
+
+    <div id="monitorView" class="module-view active">
+    <section class="hero-panel" aria-labelledby="deskTitle">
+      <div>
+        <div class="status-line">
+          <span id="runtimeDot" class="status-dot"></span>
+          <span id="runtimeText">正在连接本地服务…</span>
+          <span class="divider"></span>
+          <span id="marketStatus">判断交易时段</span>
+        </div>
+        <h2 id="deskTitle">盯住每一次关键穿越</h2>
+        <p>腾讯、东方财富、新浪并发取数。价格取多源中位数，炸板则保留每个数据源的独立状态。</p>
+      </div>
+      <div class="pulse-card">
+        <span class="pulse-label">最近轮询</span>
+        <strong id="lastUpdate">尚未获取</strong>
+        <span id="snapshotMessage">点击刷新行情进行首次检查</span>
+      </div>
+    </section>
+
+    <section class="metrics" aria-label="监控概览">
+      <article class="metric-card">
+        <span>自选监控</span>
+        <strong id="stockCount">0</strong>
+        <small>只股票</small>
+      </article>
+      <article class="metric-card">
+        <span>数据源在线</span>
+        <strong id="sourceCount">—</strong>
+        <small>最多 3 路</small>
+      </article>
+      <article class="metric-card">
+        <span>最快响应</span>
+        <strong id="fastestLatency">—</strong>
+        <small>毫秒</small>
+      </article>
+      <article class="metric-card accent-card">
+        <span>最近提醒</span>
+        <strong id="alertCount">0</strong>
+        <small>最多 100 条</small>
+      </article>
+    </section>
+
+    <section class="source-rack" aria-labelledby="sourceTitle">
+      <div class="section-heading compact-heading">
+        <div>
+          <span class="section-index">01</span>
+          <h2 id="sourceTitle">行情链路</h2>
+        </div>
+        <span class="section-note">任一路失败时自动降级，其余来源继续工作</span>
+      </div>
+      <div id="sourceList" class="source-list">
+        <div class="source-chip pending"><span class="source-light"></span><b>腾讯</b><small>等待请求</small></div>
+        <div class="source-chip pending"><span class="source-light"></span><b>东方财富</b><small>等待请求</small></div>
+        <div class="source-chip pending"><span class="source-light"></span><b>新浪</b><small>等待请求</small></div>
+      </div>
+    </section>
+
+    <div class="content-grid">
+      <section class="watch-panel" aria-labelledby="watchTitle">
+        <div class="section-heading">
+          <div>
+            <span class="section-index">02</span>
+            <h2 id="watchTitle">自选监控台</h2>
+          </div>
+          <div class="inline-actions">
+            <span id="dirtyHint" class="dirty-hint" hidden>有未保存修改</span>
+            <button id="addStockButton" class="text-button" type="button">＋ 添加股票</button>
+            <button id="saveButton" class="button button-secondary" type="button">保存自选</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>监控</th>
+                <th>悬浮</th>
+                <th>股票</th>
+                <th>最新价</th>
+                <th>涨跌幅</th>
+                <th>分时均价</th>
+                <th>成本线</th>
+                <th>MA5 / 模式</th>
+                <th>监控项目</th>
+                <th>盘中状态</th>
+                <th>来源</th>
+                <th><span class="sr-only">操作</span></th>
+              </tr>
+            </thead>
+            <tbody id="stockTableBody">
+              <tr><td colspan="12" class="empty-cell">正在读取自选股…</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="table-footer">
+          <span>成本、MA5 和每只股票的监控项目均可单独设置</span>
+          <span>数值仅保存在本机 <code>config.json</code></span>
+        </div>
+      </section>
+
+      <aside class="alerts-panel" aria-labelledby="alertsTitle">
+        <div class="section-heading">
+          <div>
+            <span class="section-index">03</span>
+            <h2 id="alertsTitle">提醒脉冲</h2>
+          </div>
+          <span class="live-label"><i></i> LIVE</span>
+        </div>
+        <div id="alertFeed" class="alert-feed">
+          <div class="empty-alert">
+            <span class="radar-icon"></span>
+            <strong>尚无提醒</strong>
+            <p>炸板、开板和关键线穿越会出现在这里。</p>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <footer>
+      <p>只读行情 · 不连接券商 · 不执行交易</p>
+      <p>免费接口可能延迟或中断，多源校验用于降低漏报，不能替代交易所授权行情。</p>
+    </footer>
+    </div>
+
+    <section id="newsView" class="module-view news-view" hidden aria-labelledby="radarTitle">
+      <div class="radar-hero">
+        <div>
+          <div class="status-line">
+            <span id="radarDot" class="status-dot"></span>
+            <span id="radarStatus">进入模块后自动获取资讯</span>
+            <span class="divider"></span>
+            <span id="radarUpdated">尚未刷新</span>
+          </div>
+          <p class="eyebrow">MARKET INTELLIGENCE STREAM</p>
+          <h2 id="radarTitle">资讯雷达</h2>
+          <p>聚合财经快讯与全网热榜，自动标出命中自选股和关注关键词的消息。</p>
+        </div>
+        <div class="radar-actions">
+          <button id="radarSettingsButton" class="button button-ghost" type="button">雷达设置</button>
+          <button id="radarRefreshButton" class="button button-primary" type="button">立即扫描</button>
+        </div>
+      </div>
+
+      <section class="radar-metrics" aria-label="资讯雷达概览">
+        <article><span>在线平台</span><strong id="radarSourceCount">—</strong><small>并发获取</small></article>
+        <article><span>本轮资讯</span><strong id="radarItemCount">—</strong><small>去除空标题</small></article>
+        <article class="related-metric"><span>命中关注</span><strong id="radarRelatedCount">—</strong><small>自选股与关键词</small></article>
+        <article><span>最快响应</span><strong id="radarLatency">—</strong><small>毫秒</small></article>
+      </section>
+
+      <section class="radar-toolbar" aria-label="资讯筛选">
+        <label class="radar-search"><span class="sr-only">搜索资讯</span><input id="radarSearch" type="search" placeholder="搜索标题、平台或关键词…"><i></i></label>
+        <label class="related-toggle"><input id="radarRelatedOnly" type="checkbox"><span class="toggle"></span><span>只看与我相关</span></label>
+        <span id="radarResultHint" class="radar-result-hint">等待扫描</span>
+      </section>
+
+      <section class="news-agent-panel" aria-labelledby="newsAgentTitle">
+        <div class="news-agent-input">
+          <div class="news-agent-heading">
+            <div><span class="eyebrow">NEWS RELATION AGENT</span><h3 id="newsAgentTitle">资讯关联 Agent</h3></div>
+            <span id="newsAgentConfigState" class="agent-config-state">API 未配置</span>
+          </div>
+          <p>把当前资讯、热榜股票和自选股交给模型，分析“新闻 → 股票/板块”与“热股 → 新闻驱动”的关系。</p>
+          <label class="agent-question-label">你的分析要求
+            <textarea id="newsAgentQuestion" rows="3" placeholder="例如：重点分析机器人、医药和地产新闻，找出与当前热榜股票的关联，并标注利好或利空。"></textarea>
+          </label>
+          <div class="news-agent-actions">
+            <button id="newsAgentSettingsButton" class="button button-ghost" type="button">API 设置</button>
+            <button id="newsAgentRunButton" class="button button-primary" type="button">分析当前资讯</button>
+          </div>
+        </div>
+        <div id="newsAgentResult" class="news-agent-result">
+          <div class="agent-empty"><span></span><strong>等待分析</strong><p>配置兼容 API 后，Agent 会在这里给出关联板块、个股和证据新闻。</p></div>
+        </div>
+      </section>
+
+      <div class="radar-layout">
+        <section class="radar-stream-panel">
+          <div id="radarSourceFilters" class="radar-source-filters">
+            <button class="active" type="button" data-source="all">全部平台</button>
+          </div>
+          <div id="radarFeed" class="radar-feed">
+            <div class="radar-empty"><span class="radar-icon"></span><strong>雷达尚未启动</strong><p>点击“立即扫描”获取财经与市场热点。</p></div>
+          </div>
+        </section>
+
+        <aside class="radar-side-panel">
+          <div class="radar-side-section">
+            <span class="eyebrow">WATCH MATCH</span>
+            <h3>关注对象</h3>
+            <p>自选股名称和代码会自动参与标题匹配。</p>
+            <div id="radarWatchTerms" class="radar-tags"><span>等待配置</span></div>
+          </div>
+          <div class="radar-side-section">
+            <span class="eyebrow">SOURCE HEALTH</span>
+            <h3>平台状态</h3>
+            <div id="radarSourceHealth" class="radar-source-health"><p>尚未请求</p></div>
+          </div>
+          <div class="radar-side-note">
+            <strong>使用说明</strong>
+            <p>红色“自选”标签代表标题命中你的股票；黄色标签代表命中自定义关键词。资讯用于辅助观察，不构成投资建议。</p>
+          </div>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="settingsDialog" class="modal">
+    <form method="dialog" class="modal-card" id="settingsForm">
+      <div class="modal-header">
+        <div><span class="eyebrow">MONITOR PROFILE</span><h2>监控设置</h2></div>
+        <button class="icon-button" value="cancel" formnovalidate aria-label="关闭">×</button>
+      </div>
+      <div class="form-grid">
+        <label>轮询间隔（秒）<input id="pollInterval" type="number" min="0.5" step="0.5" required></label>
+        <label>请求超时（秒）<input id="requestTimeout" type="number" min="0.5" step="0.5" required></label>
+        <label>穿线确认来源数<input id="lineConfirmations" type="number" min="1" max="3" step="1" required></label>
+        <label>连续确认轮数<input id="lineHoldPolls" type="number" min="1" max="10" step="1" required></label>
+        <label>快速波动窗口（秒）<input id="rapidMoveWindow" type="number" min="5" max="120" step="1" required></label>
+        <label>快速波动阈值（%）<input id="rapidMoveThreshold" type="number" min="0.1" max="30" step="0.1" required></label>
+      </div>
+      <fieldset>
+        <legend>并发数据源</legend>
+        <label class="check-card"><input type="checkbox" name="provider" value="tencent"><span><b>腾讯行情</b><small>主力快速通道</small></span></label>
+        <label class="check-card"><input type="checkbox" name="provider" value="eastmoney"><span><b>东方财富</b><small>双地址自动切换</small></span></label>
+        <label class="check-card"><input type="checkbox" name="provider" value="sina"><span><b>新浪行情</b><small>独立交叉校验</small></span></label>
+      </fieldset>
+      <div class="toggle-row">
+        <label><input id="beepEnabled" type="checkbox"><span class="toggle"></span><span>Windows 提示音</span></label>
+        <label><input id="notifyRecovery" type="checkbox"><span class="toggle"></span><span>收复关键线时提醒</span></label>
+      </div>
+      <div class="modal-actions">
+        <button class="button button-ghost" value="cancel" formnovalidate>取消</button>
+        <button id="applySettingsButton" class="button button-primary" value="default">应用并保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="stockDialog" class="modal compact-modal">
+    <form method="dialog" class="modal-card stock-dialog-card" id="stockForm">
+      <div class="modal-header">
+        <div><span class="eyebrow">WATCHLIST</span><h2>添加自选股</h2></div>
+        <button class="icon-button" value="cancel" formnovalidate aria-label="关闭">×</button>
+      </div>
+      <label>股票代码<input id="newCode" inputmode="numeric" maxlength="10" placeholder="例如 600000" required></label>
+      <label>股票名称<input id="newName" maxlength="30" placeholder="可选，行情会自动补全"></label>
+      <div class="form-grid">
+        <label>持仓成本<input id="newCost" type="number" min="0.01" step="0.01" placeholder="可选"></label>
+        <label>备用 MA5<input id="newMa5" type="number" min="0.01" step="0.01" placeholder="历史接口失败时使用"></label>
+      </div>
+      <div class="toggle-row stock-auto-row">
+        <label><input id="newAutoMa5" type="checkbox" checked><span class="toggle"></span><span>自动计算动态 MA5（推荐）</span></label>
+        <label><input id="newWidgetEnabled" type="checkbox" checked><span class="toggle"></span><span>显示在悬浮窗</span></label>
+      </div>
+      <fieldset class="stock-monitor-fieldset">
+        <legend>盘中监控项目</legend>
+        <div id="newMonitorOptions" class="monitor-options-grid"></div>
+      </fieldset>
+      <label>涨停比例
+        <select id="newLimitPct">
+          <option value="">自动判断</option>
+          <option value="0.05">5%（自定义 / 历史规则）</option>
+          <option value="0.1">10%（主板）</option>
+          <option value="0.2">20%（创业板 / 科创板）</option>
+          <option value="0.3">30%（北交所）</option>
+        </select>
+      </label>
+      <div class="modal-actions">
+        <button class="button button-ghost" value="cancel" formnovalidate>取消</button>
+        <button id="confirmAddButton" class="button button-primary" value="default">加入自选</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="stockMonitorDialog" class="modal stock-monitor-modal">
+    <form method="dialog" class="modal-card">
+      <div class="modal-header">
+        <div><span class="eyebrow">PER-STOCK ALERT PROFILE</span><h2 id="stockMonitorTitle">个股监控项目</h2><p id="stockMonitorSubtitle" class="modal-subtitle"></p></div>
+        <button class="icon-button" value="cancel" formnovalidate aria-label="关闭">×</button>
+      </div>
+      <fieldset class="stock-monitor-fieldset">
+        <legend>勾选需要为这只股票生成提醒的项目</legend>
+        <div id="stockMonitorOptions" class="monitor-options-grid"></div>
+      </fieldset>
+      <p class="monitor-help">关键线项目包含“跌破”和开启全局恢复提醒后的“重新收复”；未设置成本价或 MA5 时，对应项目暂不触发。</p>
+      <div class="modal-actions">
+        <button class="button button-ghost" value="cancel" formnovalidate>取消</button>
+        <button id="saveStockMonitorButton" class="button button-primary" value="default">应用到这只股票</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="radarSettingsDialog" class="modal radar-settings-modal">
+    <form method="dialog" class="modal-card" id="radarSettingsForm">
+      <div class="modal-header">
+        <div><span class="eyebrow">RADAR PROFILE</span><h2>资讯雷达设置</h2></div>
+        <button class="icon-button" value="cancel" formnovalidate aria-label="关闭">×</button>
+      </div>
+      <div class="form-grid">
+        <label>自动刷新间隔（秒）<input id="radarRefreshInterval" type="number" min="30" max="1800" step="10" required></label>
+        <label>每个平台最多显示<input id="radarMaxItems" type="number" min="5" max="50" step="5" required></label>
+      </div>
+      <label class="radar-keyword-field">关注关键词
+        <textarea id="radarKeywords" rows="3" placeholder="使用逗号或换行分隔，例如：机器人，低空经济，半导体"></textarea>
+        <small>自选股名称和代码无需重复填写，系统会自动匹配。</small>
+      </label>
+      <fieldset class="radar-platform-fieldset">
+        <legend>资讯平台（最多 16 个）</legend>
+        <div id="radarPlatformOptions" class="radar-platform-options"></div>
+      </fieldset>
+      <div class="modal-actions">
+        <button class="button button-ghost" value="cancel" formnovalidate>取消</button>
+        <button id="saveRadarSettingsButton" class="button button-primary" value="default">保存并重新扫描</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="newsAgentSettingsDialog" class="modal agent-settings-modal">
+    <form method="dialog" class="modal-card" id="newsAgentSettingsForm">
+      <div class="modal-header">
+        <div><span class="eyebrow">LOCAL AGENT CONNECTION</span><h2>资讯 Agent API 设置</h2></div>
+        <button class="icon-button" value="cancel" formnovalidate aria-label="关闭">×</button>
+      </div>
+      <label>API 完整地址
+        <input id="newsAgentApiUrl" type="url" placeholder="https://api.example.com/v1/chat/completions" required>
+        <small class="field-help">支持 OpenAI 兼容 Chat Completions，也支持以 /responses 结尾的 Responses 接口。</small>
+      </label>
+      <div class="form-grid agent-settings-grid">
+        <label>模型<input id="newsAgentModel" maxlength="120" placeholder="例如 gpt-5-mini" required></label>
+        <label>请求超时（秒）<input id="newsAgentTimeout" type="number" min="10" max="180" step="5" required></label>
+        <label>单次资讯上限<input id="newsAgentMaxNews" type="number" min="20" max="120" step="10" required></label>
+        <label>Temperature<input id="newsAgentTemperature" type="number" min="0" max="1.5" step="0.1" required></label>
+      </div>
+      <label>API 密钥
+        <input id="newsAgentApiKey" type="password" autocomplete="off" placeholder="留空则保持已保存密钥不变；本地接口可不填">
+        <small id="newsAgentKeyHint" class="field-help">密钥只写入本机 data/news-agent.json，不会返回给网页或放入发布压缩包。</small>
+      </label>
+      <label class="agent-clear-key"><input id="newsAgentClearKey" type="checkbox"><span>删除已经保存在本机的 API 密钥</span></label>
+      <div class="modal-actions">
+        <button class="button button-ghost" value="cancel" formnovalidate>取消</button>
+        <button id="saveNewsAgentSettingsButton" class="button button-primary" value="default">保存 API 设置</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="analysisDialog" class="modal analysis-modal">
+    <div class="modal-card analysis-card">
+      <div class="modal-header analysis-header">
+        <div>
+          <span class="eyebrow">MULTI-SOURCE TECHNICAL DESK</span>
+          <h2 id="analysisTitle">个股技术分析</h2>
+        </div>
+        <button id="closeAnalysisButton" class="icon-button" type="button" aria-label="关闭">×</button>
+      </div>
+      <div id="analysisBody" class="analysis-body">
+        <div class="analysis-loading"><span></span><p>正在并发获取复权日线并计算指标…</p></div>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="remoteDialog" class="modal remote-modal">
+    <form method="dialog" class="modal-card">
+      <div class="modal-header">
+        <div><span class="eyebrow">PRIVATE CONNECTION</span><h2>手机安全连接</h2></div>
+        <button class="icon-button" value="cancel" aria-label="关闭">×</button>
+      </div>
+      <p id="remoteState" class="remote-state"></p>
+      <label>手机访问地址<input id="remoteUrl" readonly aria-label="手机私有访问地址"></label>
+      <p id="remoteOwner" class="field-help"></p>
+      <ol class="remote-steps">
+        <li>首次连接：在电脑项目目录双击 <code>remote.cmd</code>，按提示登录 Tailscale 并启用私有 HTTPS。</li>
+        <li>手机安装官方 Tailscale，登录与电脑相同的账号，打开连接开关。</li>
+        <li>手机浏览器打开上方私有地址，可将网页添加到主屏幕。</li>
+      </ol>
+      <p class="remote-note">仅配置 Tailscale Serve，不配置公网 Funnel、不做路由器端口转发。API 地址、密钥和推送地址仅能在电脑本机管理。</p>
+      <p class="remote-note">电脑必须保持开机、联网且软件运行。网页切回前台会同步最新数据；锁屏和后台不保证及时提醒。监控配置需停止监控后保存，再重新启动。</p>
+      <div class="modal-actions">
+        <button id="disableRemoteButton" class="button button-ghost" type="button" hidden>关闭远程授权</button>
+        <button id="copyRemoteButton" class="button button-primary" type="button">复制手机地址</button>
+      </div>
+    </form>
+  </dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>

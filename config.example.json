@@ -1,0 +1,64 @@
+{
+  "poll_interval_seconds": 2.0,
+  "request_timeout_seconds": 2.5,
+  "providers": ["tencent", "eastmoney", "sina"],
+  "max_batch_size": 50,
+  "max_quote_age_seconds": 15,
+  "max_price_spread_bps": 20,
+  "line_confirmations": 2,
+  "allow_single_source_fallback": true,
+  "hysteresis_bps": 3,
+  "line_hold_polls": 2,
+  "notify_initial_bomb": true,
+  "notify_recovery": true,
+  "rapid_move_window_seconds": 20,
+  "rapid_move_threshold_pct": 3,
+  "database_path": "data/stock-alert.db",
+  "log_path": "data/stock-alert.log",
+  "sessions": [
+    ["09:15", "11:30"],
+    ["13:00", "15:00"]
+  ],
+  "holidays": [],
+  "cooldown_seconds": {
+    "bomb": 20,
+    "open_board_warning": 20,
+    "reseal": 20,
+    "break_average": 60,
+    "break_cost": 60,
+    "break_ma5": 60
+  },
+  "notifications": {
+    "beep": true,
+    "webhooks": []
+  },
+  "news_radar": {
+    "platforms": ["ths-hot", "eastmoney-hot", "xueqiu", "cls-hot", "wallstreetcn-hot", "wallstreetcn-news", "jin10", "gelonghui", "mktnews", "fastbull"],
+    "keywords": ["A股", "上证", "深证", "创业板", "科创板", "北交所"],
+    "refresh_interval_seconds": 60,
+    "request_timeout_seconds": 8,
+    "max_items_per_source": 30
+  },
+  "stocks": [
+    {
+      "code": "600000",
+      "name": "浦发银行",
+      "cost": 9.20,
+      "ma5": 9.10,
+      "auto_ma5": true,
+      "widget_enabled": true,
+      "monitor_items": ["open_board", "bomb", "reseal", "rapid_rise", "rapid_fall", "average", "cost", "ma5"],
+      "limit_pct": 0.10,
+      "enabled": true
+    },
+    {
+      "code": "000001",
+      "name": "平安银行",
+      "cost": 11.50,
+      "auto_ma5": true,
+      "widget_enabled": true,
+      "monitor_items": ["open_board", "bomb", "reseal", "rapid_rise", "rapid_fall", "average", "cost", "ma5"],
+      "enabled": true
+    }
+  ]
+}
