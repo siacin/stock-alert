@@ -365,7 +365,9 @@ class DashboardController:
             include_radar = not (isinstance(payload, dict) and payload.get("include_radar") is False)
             radar_payload = self.news_radar(force=False) if include_radar else {"items": []}
             watchlist = self.get_config().get("stocks", []) if include_radar else []
-            result = self.news_agent_service.analyze(payload, radar_payload, watchlist)
+            market_snapshot = self.market_monitor.status().get("snapshot") if include_radar else None
+            result = self.news_agent_service.analyze(
+                payload, radar_payload, watchlist, market_snapshot)
             result["result_id"] = str(time.time_ns())
             result["saved_at"] = datetime.now(TZ).isoformat()
             with self._agent_result_lock:

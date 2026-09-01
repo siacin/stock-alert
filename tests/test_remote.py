@@ -213,6 +213,7 @@ class RemoteTests(unittest.TestCase):
         radar = self.controller.news_agent_service.analyze.call_args.args[1]
         self.assertEqual(radar, {"items": []})
         self.assertEqual(self.controller.news_agent_service.analyze.call_args.args[2], [])
+        self.assertIsNone(self.controller.news_agent_service.analyze.call_args.args[3])
 
     def test_parallel_agent_run_rejected_without_extra_api_cost(self):
         self.controller._agent_run_lock.acquire()
