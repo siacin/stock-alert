@@ -16,6 +16,7 @@ config.json
 config.*.json
 !config.example.json
 data/
+work/
 .env
 .env.*
 !.env.example

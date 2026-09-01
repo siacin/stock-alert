@@ -193,6 +193,12 @@ class NewsRadarService:
             self._cached_at = 0.0
             self._cached_payload = None
 
+    def cached_hot_stocks(self) -> list[dict[str, Any]]:
+        """Return cached direct stock ranks only; never trigger network traffic."""
+        with self._lock:
+            items = (self._cached_payload or {}).get("items", [])
+            return [dict(item) for item in items if item.get("stock_code")]
+
     def fetch(
         self,
         force: bool = False,

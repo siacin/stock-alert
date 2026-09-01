@@ -19,6 +19,7 @@ from .app import AlertApplication, is_market_open, market_phase, seconds_until_n
 from .config import load_config
 from .detector import EVENT_LABELS
 from .models import normalize_code
+from .market_monitor import MarketMonitorError, MarketMonitorService
 from .news_agent import NewsAgentError, NewsAgentService
 from .news_radar import NewsRadarError, NewsRadarService, normalize_settings
 from .remote_access import RemoteAccessPolicy, merge_remote_config, remote_config_view
@@ -64,6 +65,8 @@ class DashboardController:
         self.analysis_service = TechnicalAnalysisService()
         self.news_radar_service = NewsRadarService(self.config_path)
         self.news_agent_service = NewsAgentService(self.config_path)
+        self.market_monitor = MarketMonitorService(
+            self.config_path, hotlist_provider=self.news_radar_service.cached_hot_stocks)
 
     def get_config(self) -> dict[str, Any]:
         try:
@@ -359,8 +362,9 @@ class DashboardController:
         if not self._agent_run_lock.acquire(blocking=False):
             raise DashboardError("另一台设备正在分析，请稍后查看共享结果", HTTPStatus.CONFLICT)
         try:
-            radar_payload = self.news_radar(force=False)
-            watchlist = self.get_config().get("stocks", [])
+            include_radar = not (isinstance(payload, dict) and payload.get("include_radar") is False)
+            radar_payload = self.news_radar(force=False) if include_radar else {"items": []}
+            watchlist = self.get_config().get("stocks", []) if include_radar else []
             result = self.news_agent_service.analyze(payload, radar_payload, watchlist)
             result["result_id"] = str(time.time_ns())
             result["saved_at"] = datetime.now(TZ).isoformat()
@@ -374,6 +378,16 @@ class DashboardController:
             raise DashboardError(str(exc), HTTPStatus.BAD_GATEWAY) from exc
         except OSError as exc:
             raise DashboardError("分析已完成，但结果无法保存，请检查磁盘空间") from exc
+        finally:
+            self._agent_run_lock.release()
+
+    def news_agent_test(self, payload: Any) -> dict[str, Any]:
+        if not self._agent_run_lock.acquire(blocking=False):
+            raise DashboardError("另一个 Agent 请求正在运行，请稍后测试", HTTPStatus.CONFLICT)
+        try:
+            return self.news_agent_service.test_connection(payload)
+        except NewsAgentError as exc:
+            raise DashboardError(str(exc), HTTPStatus.BAD_GATEWAY) from exc
         finally:
             self._agent_run_lock.release()
 
@@ -418,6 +432,7 @@ class DashboardController:
         ]
 
     def shutdown(self) -> None:
+        self.market_monitor.shutdown()
         self.stop()
 
 
@@ -443,7 +458,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             if not self.controller.remote_policy.authorize(self.headers):
                 raise DashboardError("远程访问未启用或账号未获授权。请通过同一账号的 Tailscale 私有地址访问。", HTTPStatus.FORBIDDEN)
             path = urlparse(self.path).path
-            if path.startswith("/api/remote") or path == "/api/news-agent/settings":
+            if path.startswith("/api/remote") or path in {"/api/news-agent/settings", "/api/news-agent/test"}:
                 raise DashboardError("此设置只能在电脑本机操作", HTTPStatus.FORBIDDEN)
         else:
             port = self.server.server_address[1]
@@ -523,6 +538,12 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self._send_static("styles.css", "text/css; charset=utf-8")
         elif parsed.path == "/app.js":
             self._send_static("app.js", "text/javascript; charset=utf-8")
+        elif parsed.path == "/market.js":
+            self._send_static("market.js", "text/javascript; charset=utf-8")
+        elif parsed.path == "/market.css":
+            self._send_static("market.css", "text/css; charset=utf-8")
+        elif parsed.path == "/api/market-monitor":
+            self._send_json(self.controller.market_monitor.status())
         elif parsed.path == "/api/ping":
             self._send_json({"app": "stock-alert-dashboard", "ok": True, "remote": self.remote, "version": 2})
         elif parsed.path == "/api/access":
@@ -588,11 +609,13 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 payload = self.controller.save_news_radar_settings(self._read_json(), require_revision=True)
             elif path == "/api/news-agent/settings":
                 payload = self.controller.save_news_agent_settings(self._read_json())
+            elif path == "/api/market-monitor/settings":
+                payload = self.controller.market_monitor.save_settings(self._read_json())
             else:
                 self.send_error(HTTPStatus.NOT_FOUND)
                 return
             self._send_json(payload)
-        except DashboardError as exc:
+        except (DashboardError, MarketMonitorError) as exc:
             self._send_json({"error": str(exc)}, exc.status)
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
@@ -605,8 +628,18 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 payload = self.controller.stop()
             elif path == "/api/monitor/refresh":
                 payload = self.controller.refresh_once()
+            elif path == "/api/market-monitor/start":
+                payload = self.controller.market_monitor.start()
+            elif path == "/api/market-monitor/stop":
+                payload = self.controller.market_monitor.stop()
+            elif path == "/api/market-monitor/refresh":
+                payload = self.controller.market_monitor.refresh()
             elif path == "/api/news-agent/analyze":
                 payload = self.controller.news_agent_analyze(self._read_json())
+                self._send_json(payload)
+                return
+            elif path == "/api/news-agent/test":
+                payload = self.controller.news_agent_test(self._read_json())
                 self._send_json(payload)
                 return
             elif path == "/api/remote/disable":
@@ -616,7 +649,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 self.send_error(HTTPStatus.NOT_FOUND)
                 return
             self._send_json(payload, HTTPStatus.ACCEPTED)
-        except DashboardError as exc:
+        except (DashboardError, MarketMonitorError) as exc:
             self._send_json({"error": str(exc)}, exc.status)
 
     def log_message(self, format: str, *args: Any) -> None:

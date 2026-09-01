@@ -132,11 +132,12 @@ class NewsRadarServiceTests(unittest.TestCase):
                 }
             )
 
-        result = NewsRadarService(
+        service = NewsRadarService(
             self.config_path,
             request_get=direct_get,
             request_post=direct_post,
-        ).fetch(force=True)
+        )
+        result = service.fetch(force=True)
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["item_count"], 2)
@@ -151,6 +152,10 @@ class NewsRadarServiceTests(unittest.TestCase):
         self.assertEqual(eastmoney["price"], 10.25)
         self.assertEqual(eastmoney["change_pct"], -1.2)
         self.assertIn("浦发银行", eastmoney["matched_stocks"])
+        cached = service.cached_hot_stocks()
+        self.assertEqual({item["stock_code"] for item in cached}, {"000001", "600000"})
+        cached[0]["stock_code"] = "调用方修改不应污染缓存"
+        self.assertNotEqual(service.cached_hot_stocks()[0]["stock_code"], cached[0]["stock_code"])
 
     def test_settings_reject_unknown_platform(self) -> None:
         with self.assertRaises(NewsRadarError):

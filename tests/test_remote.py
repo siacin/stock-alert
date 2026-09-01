@@ -65,8 +65,20 @@ class RemoteTests(unittest.TestCase):
             return response.status, json.loads(body) if response.headers.get_content_type() == "application/json" else body
 
     def test_unauthenticated_html_static_and_api_are_denied(self):
-        for route in ("/", "/app.js", "/styles.css", "/api/config", "/api/alerts", "/api/news-agent/result"):
+        for route in ("/", "/app.js", "/styles.css", "/market.js", "/market.css", "/api/market-monitor", "/api/config", "/api/alerts", "/api/news-agent/result"):
             self.assertEqual(self.request(route, authorized=False)[0], 403, route)
+
+    def test_market_monitor_shared_settings_require_owner_and_revision(self):
+        status, data = self.request("/api/market-monitor")
+        self.assertEqual(status, 200)
+        settings = data["settings"]
+        settings["interval_seconds"] = 30
+        self.assertEqual(self.request("/api/market-monitor/settings", method="PUT", payload=settings, authorized=False)[0], 403)
+        self.assertEqual(self.request("/api/market-monitor/settings", method="PUT", payload=settings)[0], 200)
+        self.assertEqual(self.request("/api/market-monitor/settings", method="PUT", payload=settings)[0], 409)
+        self.assertEqual(self.request("/api/market-monitor", local=True)[1]["settings"]["interval_seconds"], 30)
+        self.assertEqual(self.request("/api/market-monitor/start", method="POST", headers={"Origin":"https://evil.example"})[0], 403)
+        self.assertFalse(self.controller.market_monitor.status()["enabled"])
 
     def test_wrong_owner_and_public_funnel_requests_fail_closed(self):
         self.assertEqual(self.request("/api/status", headers={"Tailscale-User-Login": "other@example.com"})[0], 403)
@@ -78,6 +90,26 @@ class RemoteTests(unittest.TestCase):
         for method in ("GET", "PUT"):
             self.assertEqual(self.request("/api/news-agent/settings", method=method, payload={} if method == "PUT" else None)[0], 403)
         self.assertEqual(self.request("/api/remote/disable", method="POST")[0], 403)
+        self.assertEqual(self.request("/api/news-agent/test", method="POST", payload={})[0], 403)
+
+    def test_local_agent_probe_does_not_fetch_personal_context(self):
+        self.controller.news_agent_service.test_connection = Mock(return_value={"ok":True,"saved":False})
+        self.controller.news_radar = Mock(side_effect=AssertionError("probe must not fetch news"))
+        status,result=self.request("/api/news-agent/test",method="POST",payload={},local=True)
+        self.assertEqual(status,200)
+        self.assertFalse(result["saved"])
+        self.controller.news_radar.assert_not_called()
+        self.controller.news_agent_service.test_connection.assert_called_once_with({})
+
+    def test_probe_shares_analysis_lock_and_requires_same_origin(self):
+        self.controller.news_agent_service.test_connection=Mock(return_value={"ok":True})
+        self.controller._agent_run_lock.acquire()
+        try:
+            self.assertEqual(self.request("/api/news-agent/test",method="POST",payload={},local=True)[0],409)
+        finally:
+            self.controller._agent_run_lock.release()
+        self.assertEqual(self.request("/api/news-agent/test",method="POST",payload={},local=True,headers={"Origin":"https://evil.example"})[0],403)
+        self.controller.news_agent_service.test_connection.assert_not_called()
 
     def test_host_localhost_does_not_bypass_remote_authorization(self):
         self.assertEqual(self.request("/api/config", authorized=False, headers={"Host": "localhost:8765"})[0], 403)
@@ -171,6 +203,16 @@ class RemoteTests(unittest.TestCase):
         restarted = DashboardController(self.path)
         self.assertEqual(restarted.news_agent_result()["result"], saved)
         restarted.shutdown()
+
+    def test_manual_news_can_skip_radar_fetch(self):
+        self.controller.news_radar = Mock(side_effect=AssertionError("manual-only analysis must not fetch radar"))
+        self.controller.news_agent_service.analyze = Mock(return_value={"structured": True, "analysis": {"overview": "manual"}})
+        result = self.controller.news_agent_analyze({"user_news": "模拟新闻", "include_radar": False})
+        self.assertEqual(result["analysis"]["overview"], "manual")
+        self.controller.news_radar.assert_not_called()
+        radar = self.controller.news_agent_service.analyze.call_args.args[1]
+        self.assertEqual(radar, {"items": []})
+        self.assertEqual(self.controller.news_agent_service.analyze.call_args.args[2], [])
 
     def test_parallel_agent_run_rejected_without_extra_api_cost(self):
         self.controller._agent_run_lock.acquire()

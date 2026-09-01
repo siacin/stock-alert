@@ -11,6 +11,7 @@ const state = {
   newsAgentSettings: null,
   newsAgentBusy: false,
   newsAgentResult: null,
+  newsAgentDirectionPlan: null,
   radarBusy: false,
   radarLoaded: false,
   radarSource: "all",
@@ -204,17 +205,20 @@ function formatTime(value, includeDate = false) {
 }
 
 function switchView(view) {
-  state.activeView = view === "news" ? "news" : "monitor";
+  state.activeView = ["news", "market"].includes(view) ? view : "monitor";
   const newsActive = state.activeView === "news";
-  $("#monitorView").hidden = newsActive;
+  $("#monitorView").hidden = state.activeView !== "monitor";
   $("#newsView").hidden = !newsActive;
+  $("#marketView").hidden = state.activeView !== "market";
   document.body.classList.toggle("news-active", newsActive);
+  document.body.classList.toggle("market-active", state.activeView === "market");
   document.querySelectorAll(".module-tab").forEach((button) => {
     const active = button.dataset.view === state.activeView;
     button.classList.toggle("active", active);
     button.setAttribute("aria-selected", active ? "true" : "false");
   });
   if (newsActive && !state.radarLoaded) loadRadar();
+  if (state.activeView === "market") window.marketMonitor?.activate();
 }
 
 function radarCategoryClass(category) {
@@ -441,9 +445,13 @@ async function openNewsAgentSettings() {
     const settings = await loadNewsAgentSettings();
     $("#newsAgentApiUrl").value = settings.api_url || "";
     $("#newsAgentModel").value = settings.model || "";
-    $("#newsAgentTimeout").value = settings.request_timeout_seconds ?? 60;
+    $("#newsAgentTimeout").value = settings.request_timeout_seconds ?? 180;
     $("#newsAgentMaxNews").value = settings.max_news_items ?? 60;
-    $("#newsAgentTemperature").value = settings.temperature ?? 0.2;
+    $("#newsAgentTemperature").value = settings.temperature ?? "";
+    $("#newsAgentStreamMode").value = settings.stream_mode || "auto";
+    $("#newsAgentThinkingMode").value = settings.thinking_mode || "auto";
+    $("#newsAgentOutputLimit").value = settings.max_output_tokens || 8192;
+    $("#newsAgentTestResult").textContent = "测试仅发送固定短文字，不发送新闻或自选股、不保存设置，可能产生少量 API 费用。";
     $("#newsAgentApiKey").value = "";
     $("#newsAgentApiKey").placeholder = settings.api_key_configured
       ? "已保存密钥；留空则保持不变"
@@ -458,16 +466,36 @@ async function openNewsAgentSettings() {
   }
 }
 
-async function saveNewsAgentSettings() {
-  const payload = {
+function newsAgentSettingsPayload() {
+  return {
     api_url: $("#newsAgentApiUrl").value.trim(),
     model: $("#newsAgentModel").value.trim(),
     request_timeout_seconds: Number($("#newsAgentTimeout").value),
     max_news_items: Number($("#newsAgentMaxNews").value),
-    temperature: Number($("#newsAgentTemperature").value),
+    temperature: $("#newsAgentTemperature").value.trim() === "" ? null : Number($("#newsAgentTemperature").value),
+    stream_mode: $("#newsAgentStreamMode").value,
+    thinking_mode: $("#newsAgentThinkingMode").value,
+    max_output_tokens: Number($("#newsAgentOutputLimit").value),
     api_key: $("#newsAgentApiKey").value.trim(),
     clear_api_key: $("#newsAgentClearKey").checked,
   };
+}
+
+async function testNewsAgentConnection() {
+  if (!$("#newsAgentSettingsForm").reportValidity() || $("#testNewsAgentButton").disabled) return;
+  const button = $("#testNewsAgentButton");
+  button.disabled = true;
+  $("#newsAgentTestResult").textContent = "正在发送固定短测试文字，请等待；不会上传资讯、自选或成本数据。";
+  try {
+    const result = await api("/api/news-agent/test", {method:"POST", body:JSON.stringify(newsAgentSettingsPayload())});
+    $("#newsAgentTestResult").textContent = `连接成功：${result.model} · ${(result.latency_ms/1000).toFixed(1)} 秒 · ${result.response_format.toUpperCase()} · ${result.reply}。实际地址：${result.api_url}。测试未保存设置，请点击保存。`;
+  } catch (error) {
+    $("#newsAgentTestResult").textContent = `连接失败：${error.message}`;
+  } finally { button.disabled = false; }
+}
+
+async function saveNewsAgentSettings() {
+  const payload = newsAgentSettingsPayload();
   try {
     const result = await api("/api/news-agent/settings", { method: "PUT", body: JSON.stringify(payload) });
     state.newsAgentSettings = result.settings;
@@ -509,6 +537,135 @@ function agentConfidence(value) {
   return `<span class="agent-confidence ${css}">${agentText(label)}置信度</span>`;
 }
 
+function agentMiniList(title, values, tone = "") {
+  const items = agentArray(values).filter((item) => String(item ?? "").trim());
+  return items.length ? `<div class="agent-mini-list ${tone}"><strong>${agentText(title)}</strong><ul>${items.map((item) => `<li>${agentText(item)}</li>`).join("")}</ul></div>` : "";
+}
+
+function agentDirectionClass(value) {
+  const direction = String(value || "");
+  return direction.includes("利好") ? "up" : direction.includes("利空") ? "down" : "";
+}
+
+function agentStockCard(stock, excluded = false) {
+  const label = [stock?.name, stock?.code].filter(Boolean).join(" · ") || "未命名标的";
+  const details = [stock?.relation_type, stock?.sector, stock?.direction, stock?.market_role, stock?.evidence_grade ? `${stock.evidence_grade}级证据` : ""].filter(Boolean);
+  const evidence = agentArray(stock?.evidence);
+  return `<article class="agent-stock-card">
+    <div class="agent-stock-head"><strong>${agentText(label)}</strong>${excluded ? "" : agentConfidence(stock?.confidence)}</div>
+    ${details.length ? `<div class="agent-profile-tags">${details.map((item) => `<span>${agentText(item)}</span>`).join("")}</div>` : ""}
+    <p>${agentText(stock?.reason, "未给出关联理由")}</p>
+    ${stock?.driver ? `<small>验证/催化：${agentText(stock.driver)}</small>` : ""}
+    ${stock?.why_this_stock ? `<small>相对优势：${agentText(stock.why_this_stock)}</small>` : ""}
+    ${stock?.directness ? `<small>关联直接性：${agentText(stock.directness)}</small>` : ""}
+    ${stock?.value_chain_position ? `<small>产业链卡位：${agentText(stock.value_chain_position)}</small>` : ""}
+    ${stock?.business_purity ? `<small>业务纯度：${agentText(stock.business_purity)}</small>` : ""}
+    ${stock?.earnings_elasticity ? `<small>业绩弹性：${agentText(stock.earnings_elasticity)}</small>` : ""}
+    ${stock?.peer_comparison ? `<small>同行比较：${agentText(stock.peer_comparison)}</small>` : ""}
+    ${stock?.market_data_status ? `<small>市值/股性证据：${agentText(stock.market_data_status)}</small>` : ""}
+    ${agentArray(stock?.upgrade_conditions).length ? `<small>升级条件：${agentArray(stock.upgrade_conditions).map((item) => agentText(item)).join("；")}</small>` : ""}
+    ${agentArray(stock?.downgrade_conditions).length ? `<small>降级/证伪：${agentArray(stock.downgrade_conditions).map((item) => agentText(item)).join("；")}</small>` : ""}
+    ${stock?.knowledge_source ? `<small>信息来源：${agentText(stock.knowledge_source)}</small>` : ""}
+    ${stock?.risk ? `<small>风险：${agentText(stock.risk)}</small>` : ""}
+    ${evidence.length ? `<small>证据：${evidence.map((item) => agentText(item)).join("；")}</small>` : ""}
+  </article>`;
+}
+
+function renderDetailedAgentSections(analysis) {
+  const profile = analysis?.event_profile && typeof analysis.event_profile === "object" ? analysis.event_profile : null;
+  const topics = agentArray(analysis?.topic_summaries);
+  const deepDives = agentArray(analysis?.direction_deep_dives);
+  const paths = agentArray(analysis?.transmission_path);
+  const sectors = agentArray(analysis?.sector_impacts);
+  const buckets = analysis?.stock_buckets && typeof analysis.stock_buckets === "object" ? analysis.stock_buckets : {};
+  const ladders = agentArray(analysis?.sector_ladders);
+  const validation = analysis?.validation_signals && typeof analysis.validation_signals === "object" ? analysis.validation_signals : {};
+  const scenarios = agentArray(analysis?.scenarios);
+  const coverage = analysis?.coverage_audit && typeof analysis.coverage_audit === "object" ? analysis.coverage_audit : null;
+  const bucketDefs = [
+    ["core", "主攻 · 逻辑最强"], ["observation", "观察 · 强关联待验证"], ["sentiment", "超短情绪 · 小市值/股性"],
+    ["negative", "负面暴露"], ["excluded", "排除项"],
+  ];
+  const bucketCount = bucketDefs.reduce((count, [key]) => count + agentArray(buckets[key]).length, 0);
+  if (!profile && !topics.length && !deepDives.length && !paths.length && !sectors.length && !bucketCount && !ladders.length && !scenarios.length) return "";
+  const profileTags = profile ? [profile.event_type, profile.scope, profile.direction, profile.time_horizon, profile.confidence ? `${profile.confidence}置信度` : ""].filter(Boolean) : [];
+  return `
+    ${topics.length ? `<section class="agent-result-section"><h4>集合主题总览 · 全量不遗漏</h4><div class="agent-theme-grid compact">${topics.map((topic) => `<article class="agent-theme-card"><div><strong>${agentText(topic?.title, topic?.topic_id || "未命名主题")}</strong><span class="agent-direction ${agentDirectionClass(topic?.direction)}">${agentText(topic?.direction, "中性")} · ${agentText(topic?.priority, "待排序")}</span></div><p>${agentText(topic?.summary, "暂无简要结论")}</p><div class="agent-profile-tags">${agentArray(topic?.sectors).map((sector) => `<span>${agentText(sector)}</span>`).join("")}<span>${topic?.selected_for_deep_dive ? "本轮深挖" : "本轮简析"}</span></div>${topic?.deferred_reason ? `<small>未深挖原因：${agentText(topic.deferred_reason)}</small>` : ""}</article>`).join("")}</div></section>` : ""}
+    ${profile ? `<section class="agent-result-section"><h4>事件画像</h4><div class="agent-profile">
+      <div class="agent-profile-head"><h4>${agentText(profile.title, "事件画像")}</h4><span class="agent-direction ${agentDirectionClass(profile.direction)}">${agentText(profile.direction, "方向待定")}</span></div>
+      <div class="agent-profile-tags">${profileTags.map((item) => `<span>${agentText(item)}</span>`).join("")}</div>
+      <p>${agentText(profile.summary, "尚未形成完整事件定性")}</p>
+      <div class="agent-fact-grid">${agentMiniList("输入明确事实", profile.key_facts)}${agentMiniList("信息缺口", profile.unknowns, "warning")}</div>
+      ${agentArray(profile.quantitative_facts).length ? `<div class="agent-mini-list"><strong>定量锚点</strong><ul>${agentArray(profile.quantitative_facts).map((fact) => `<li>${agentText(fact?.metric)}：${agentText(fact?.value)} · ${agentText(fact?.meaning)}（${agentText(fact?.source_status, "待核验")}）</li>`).join("")}</ul></div>` : ""}
+    </div></section>` : ""}
+    ${deepDives.length ? `<section class="agent-result-section"><h4>单方向深挖 · 产业链 × 弹性 × 反方逻辑</h4><div class="agent-deep-grid">${deepDives.map((dive) => `<article class="agent-deep-card"><h5>${agentText(dive?.direction, "未命名方向")}</h5><p>${agentText(dive?.conclusion)}<br>${agentText(dive?.mechanism)}</p><div class="agent-chain-table">${agentArray(dive?.value_chain).map((layer) => `<div><b>${agentText(layer?.layer, "环节")}</b><p>${agentText(layer?.impact)}<br>${agentText(layer?.beneficiary_profile)}</p></div>`).join("")}</div>${dive?.economics ? `<div class="agent-economics">弹性公式：${agentText(dive.economics.formula, "数据不足，暂不计算")}<br>已知：${agentArray(dive.economics.known_inputs).map(agentText).join("；") || "无"}<br>待补：${agentArray(dive.economics.missing_inputs).map(agentText).join("；") || "无"}</div>` : ""}<div class="agent-fact-grid">${agentMiniList("候选覆盖类别", dive?.candidate_categories)}${agentMiniList("反方与证伪", dive?.counter_arguments, "warning")}</div>${agentArray(dive?.historical_analogs).length ? `<div class="agent-mini-list"><strong>历史类比</strong><ul>${agentArray(dive.historical_analogs).map((item) => `<li>${agentText(item?.event)}：${agentText(item?.lesson)}（${agentText(item?.source_status, "待核验")}）</li>`).join("")}</ul></div>` : ""}</article>`).join("")}</div></section>` : ""}
+    ${paths.length ? `<section class="agent-result-section"><h4>逻辑传导链</h4><div class="agent-path">${paths.map((item, index) => `<article><b>${agentText(item?.step, index + 1)}</b><strong>${agentText(item?.from, "事件")} → ${agentText(item?.to, "影响对象")}<br><small>${agentText(item?.strength, "待定")}</small></strong><p>${agentText(item?.logic)}${item?.evidence ? `<br>证据：${agentText(item.evidence)}` : ""}${item?.uncertainty ? `<br>失效条件：${agentText(item.uncertainty)}` : ""}</p></article>`).join("")}</div></section>` : ""}
+    ${sectors.length ? `<section class="agent-result-section"><h4>关联板块与产业链位置</h4><div class="agent-sector-grid">${sectors.map((sector) => `<article class="agent-sector-card">
+      <div class="agent-sector-head"><strong>${agentText(sector?.sector, "未命名板块")}</strong><span class="agent-direction ${agentDirectionClass(sector?.direction)}">${agentText(sector?.direction, "中性")} · ${agentText(sector?.strength, "待定")}</span></div>
+      <div class="agent-profile-tags"><span>${agentText(sector?.industry_level, "层级待定")}</span><span>${agentText(sector?.role, "角色待定")}</span></div><p>${agentText(sector?.logic)}</p>
+      <div class="agent-fact-grid">${agentMiniList("受益成立条件", sector?.benefit_conditions)}${agentMiniList("反向/风险条件", sector?.risk_conditions, "warning")}</div>${agentNewsIds(sector?.related_news_ids)}
+    </article>`).join("")}</div></section>` : ""}
+    ${bucketCount ? `<section class="agent-result-section"><h4>个股分层 · 方向 × 标的 × 逻辑</h4><div class="agent-stock-board">${bucketDefs.map(([key, title]) => {
+      const stocks = agentArray(buckets[key]);
+      return stocks.length ? `<div class="agent-stock-column ${key}"><h5>${agentText(title)} · ${stocks.length}</h5>${stocks.map((stock) => agentStockCard(stock, key === "excluded")).join("")}</div>` : "";
+    }).join("")}</div></section>` : ""}
+    ${ladders.length ? `<section class="agent-result-section"><h4>板块梯队</h4><div class="agent-ladder-grid">${ladders.map((ladder) => `<article class="agent-ladder-card"><strong>${agentText(ladder?.sector, "未命名板块")}</strong><p>${agentText(ladder?.logic, "按关联强弱分层")}</p>${agentArray(ladder?.tiers).map((tier) => `<div class="agent-tier"><b>${agentText(tier?.tier, "梯队")}</b><p>${agentArray(tier?.stocks).map((stock) => `${agentText([stock?.name, stock?.code].filter(Boolean).join(" · "), "未命名标的")}：${agentText(stock?.reason)}`).join("<br>")}</p></div>`).join("")}</article>`).join("")}</div></section>` : ""}
+    ${(agentArray(validation.confirmed).length || agentArray(validation.to_verify).length || agentArray(validation.invalidation).length) ? `<section class="agent-result-section"><h4>事实核验与失效条件</h4><div class="agent-validation-grid">${agentMiniList("已确认", validation.confirmed)}${agentMiniList("待验证", validation.to_verify, "warning")}${agentMiniList("逻辑失效信号", validation.invalidation, "negative")}</div></section>` : ""}
+    ${scenarios.length ? `<section class="agent-result-section"><h4>情景推演（非涨跌预测）</h4><div class="agent-scenario-grid">${scenarios.map((scenario) => `<article class="agent-scenario-card"><strong>${agentText(scenario?.name, "情景")}</strong><span>${agentText(scenario?.probability, "概率待定")}</span>${agentMiniList("前提", scenario?.conditions)}<p>${agentText(scenario?.market_impact)}</p></article>`).join("")}</div></section>` : ""}
+    ${coverage ? `<div class="agent-coverage">覆盖审计：检查 ${agentArray(coverage.directions_checked).map(agentText).join("、") || "—"}；候选 ${agentText(coverage.candidate_count, "—")}，纳入 ${agentText(coverage.included_count, "—")}，排除 ${agentText(coverage.excluded_count, "—")}。<br>未解决类别：${agentArray(coverage.unresolved_categories).map(agentText).join("；") || "无"}<br>本轮未深挖：${agentArray(coverage.deferred_topics).map((topic) => `${agentText(topic?.title, topic?.topic_id || "未命名主题")}（${agentText(topic?.reason, "受本轮预算限制")}）`).join("；") || "无"}<br>${agentText(coverage.coverage_limit, "模型知识与输入数据有限，仍需外部核验")}</div>` : ""}`;
+}
+
+function renderNewsAgentDirectionDiscovery(payload) {
+  const target = $("#newsAgentResult");
+  const analysis = payload?.analysis || {};
+  const metadata = payload?.metadata || {};
+  const units = agentArray(analysis.analysis_units);
+  if (state.newsAgentDirectionPlan) state.newsAgentDirectionPlan.units = units;
+  const cards = units.map((unit, index) => `<label class="agent-direction-choice">
+    <input type="checkbox" data-agent-unit-index="${index}">
+    <span class="agent-direction-choice-body">
+      <span class="agent-direction-choice-head"><b>${agentText(unit?.title, `方向 ${index + 1}`)}</b><i class="agent-direction ${agentDirectionClass(unit?.direction)}">${agentText(unit?.direction, "待判断")} · ${agentText(unit?.priority, "中")}</i></span>
+      <span class="agent-profile-tags"><em>${agentText(unit?.category, "其他")}</em>${agentArray(unit?.source_topic_ids).map((id) => `<em>${agentText(id)}</em>`).join("")}</span>
+      <strong>产业传导逻辑</strong><p>${agentText(unit?.reason, "待进一步分析")}</p>
+      ${agentArray(unit?.source_facts).length ? `<strong>输入事实</strong><ul>${agentArray(unit.source_facts).map((fact) => `<li>${agentText(fact)}</li>`).join("")}</ul>` : ""}
+    </span>
+  </label>`).join("");
+  target.innerHTML = `<div class="agent-result-head"><div><span class="eyebrow">DIRECTION DISCOVERY</span><h3>发现 ${units.length} 个产业方向</h3></div><span>第 1 阶段完成</span></div>
+    <div class="agent-overview">${agentText(analysis.overview, "请选择需要深挖的产业方向")}</div>
+    <section class="agent-direction-picker">
+      <div class="agent-direction-picker-toolbar"><div><b>选择深挖方向</b><small>可选一个、多个或全部；没有自动主题上限</small></div><div><button type="button" class="button button-ghost" id="agentDirectionSelectAll">全选</button><button type="button" class="button button-ghost" id="agentDirectionClearAll">清空</button></div></div>
+      <div class="agent-direction-choice-list">${cards || `<div class="agent-empty error"><strong>没有形成可选方向</strong></div>`}</div>
+      <div class="agent-direction-submit"><p>每个选中方向会发起一次独立模型请求；方向越多，耗时和 API 费用越高。单个方向失败不会影响其他方向。</p><button type="button" class="button button-primary" id="newsAgentAnalyzeSelectedButton" disabled>分析选中方向（0）</button></div>
+    </section>
+    ${agentArray(analysis.risks).length ? `<section class="agent-result-section agent-risks"><h4>初筛边界</h4><ul>${agentArray(analysis.risks).map((risk) => `<li>${agentText(risk)}</li>`).join("")}</ul></section>` : ""}
+    <div class="agent-meta">${agentText(metadata.model, "未知模型")} · ${agentText(metadata.api_host, "未知接口")} · ${agentText(metadata.latency_ms, "—")} ms · 方向发现 ${agentText(metadata.planned_unit_count, units.length)} 个 · 1 次调用</div>`;
+
+  const checkboxes = Array.from(target.querySelectorAll?.("input[data-agent-unit-index]") || []);
+  const submit = target.querySelector?.("#newsAgentAnalyzeSelectedButton");
+  const update = () => {
+    const count = checkboxes.filter((item) => item.checked).length;
+    if (submit) { submit.disabled = count === 0 || !state.newsAgentDirectionPlan?.request; submit.textContent = state.newsAgentDirectionPlan?.request ? `分析选中方向（${count}）` : "请重新分析产业方向"; }
+  };
+  checkboxes.forEach((item) => item.addEventListener("change", update));
+  target.querySelector?.("#agentDirectionSelectAll")?.addEventListener("click", () => { checkboxes.forEach((item) => { item.checked = true; }); update(); });
+  target.querySelector?.("#agentDirectionClearAll")?.addEventListener("click", () => { checkboxes.forEach((item) => { item.checked = false; }); update(); });
+  submit?.addEventListener("click", () => runSelectedNewsAgent());
+  update();
+}
+
+function selectedNewsAgentUnits() {
+  const units = state.newsAgentDirectionPlan?.units || [];
+  const checked = Array.from($("#newsAgentResult").querySelectorAll?.("input[data-agent-unit-index]:checked") || []);
+  return checked.map((item) => units[Number(item.dataset.agentUnitIndex)]).filter(Boolean);
+}
+
+function invalidateNewsAgentDirectionPlan() {
+  if (!state.newsAgentDirectionPlan) return;
+  state.newsAgentDirectionPlan = null;
+  const button = $("#newsAgentResult").querySelector?.("#newsAgentAnalyzeSelectedButton");
+  if (button) { button.disabled = true; button.textContent = "资讯已变化，请重新分析方向"; }
+}
+
 function renderNewsAgentResult(payload) {
   state.newsAgentResult = payload;
   const target = $("#newsAgentResult");
@@ -520,26 +677,35 @@ function renderNewsAgentResult(payload) {
       <div class="agent-meta">${agentText(metadata.model, "未知模型")} · ${agentText(metadata.api_host, "未知接口")} · ${agentText(metadata.latency_ms, "—")} ms</div>`;
     return;
   }
+  if (metadata.analysis_mode === "discover") {
+    renderNewsAgentDirectionDiscovery(payload);
+    return;
+  }
   const analysis = payload.analysis || {};
   const themes = agentArray(analysis.themes);
   const newsRelations = agentArray(analysis.news_to_market);
   const hotRelations = agentArray(analysis.hot_stock_to_news);
   const watchImpacts = agentArray(analysis.watchlist_impacts);
   const risks = agentArray(analysis.risks);
+  const topicResults = agentArray(analysis.topic_results);
+  const detailedSections = renderDetailedAgentSections(analysis);
+  const topicResultsHtml = topicResults.length ? `<section class="agent-result-section agent-topic-results"><h4>逐方向独立分析 · ${topicResults.filter((item) => item?.ok).length}/${topicResults.length} 成功</h4>${topicResults.map((item, index) => `<article class="agent-topic-result ${item?.ok ? "ok" : "failed"}"><div class="agent-topic-result-head"><div><span>方向 ${index + 1}</span><h4>${agentText(item?.title, item?.topic_id || "未命名方向")}</h4></div><b>${item?.ok ? "分析完成" : "本方向失败"}</b></div>${item?.ok ? `<div class="agent-overview">${agentText(item?.analysis?.overview, "本方向未给出概览")}</div>${renderDetailedAgentSections(item.analysis || {})}${agentArray(item?.analysis?.risks).length ? `<div class="agent-mini-list warning"><strong>本方向风险</strong><ul>${agentArray(item.analysis.risks).map((risk) => `<li>${agentText(risk)}</li>`).join("")}</ul></div>` : ""}` : `<div class="agent-empty error"><strong>该方向未影响其他结果</strong><p>${agentText(item?.error, "模型未返回完整结果")}</p></div>`}</article>`).join("")}</section>` : "";
   target.innerHTML = `
     <div class="agent-result-head">
       <div><span class="eyebrow">AGENT RESULT</span><h3>资讯与市场关联图谱</h3></div>
       <span>${agentText(metadata.news_count, "0")} 条上下文</span>
     </div>
     <div class="agent-overview">${agentText(analysis.overview, "本轮没有形成明确结论")}</div>
-    ${themes.length ? `<section class="agent-result-section"><h4>板块主题</h4><div class="agent-theme-grid">${themes.map((theme) => `
+    ${detailedSections}
+    ${topicResultsHtml}
+    ${!detailedSections && themes.length ? `<section class="agent-result-section"><h4>板块主题</h4><div class="agent-theme-grid">${themes.map((theme) => `
       <article class="agent-theme-card">
         <div><strong>${agentText(theme?.sector, "未命名板块")}</strong><span class="agent-direction ${String(theme?.direction || "").includes("利好") ? "up" : String(theme?.direction || "").includes("利空") ? "down" : ""}">${agentText(theme?.direction, "中性")}</span></div>
         <p>${agentText(theme?.reason)}</p>
         <div class="agent-tags">${agentStockTags(theme?.related_stocks)}</div>
         ${agentNewsIds(theme?.related_news_ids)}
       </article>`).join("")}</div></section>` : ""}
-    ${newsRelations.length ? `<section class="agent-result-section"><h4>新闻 → 股票 / 板块</h4><div class="agent-relation-list">${newsRelations.map((relation) => `
+    ${!detailedSections && newsRelations.length ? `<section class="agent-result-section"><h4>新闻 → 股票 / 板块</h4><div class="agent-relation-list">${newsRelations.map((relation) => `
       <article>
         <div class="agent-relation-title"><strong>${agentText(relation?.title, relation?.news_id || "新闻")}</strong>${agentConfidence(relation?.confidence)}</div>
         <p>${agentText(relation?.relation)}</p>
@@ -556,11 +722,12 @@ function renderNewsAgentResult(payload) {
     ${watchImpacts.length ? `<section class="agent-result-section"><h4>自选股影响</h4><div class="agent-theme-grid compact">${watchImpacts.map((impact) => `
       <article class="agent-theme-card"><div><strong>${agentText([impact?.name, impact?.code].filter(Boolean).join(" · "), "自选股")}</strong><span class="agent-direction">${agentText(impact?.direction, "不明确")}</span></div><p>${agentText(impact?.reason)}</p>${agentNewsIds(impact?.related_news_ids)}</article>`).join("")}</div></section>` : ""}
     ${risks.length ? `<section class="agent-result-section agent-risks"><h4>信息边界与风险</h4><ul>${risks.map((risk) => `<li>${agentText(risk)}</li>`).join("")}</ul></section>` : ""}
-    <div class="agent-meta">${agentText(metadata.model, "未知模型")} · ${agentText(metadata.api_host, "未知接口")} · ${agentText(metadata.latency_ms, "—")} ms · 热榜 ${agentText(metadata.hot_stock_count, "0")} 条</div>`;
+    <div class="agent-meta">${agentText(metadata.model, "未知模型")} · ${agentText(metadata.api_host, "未知接口")} · ${agentText(metadata.latency_ms, "—")} ms · ${metadata.analysis_mode === "deep" ? `用户选中 ${agentText(metadata.selected_unit_count, topicResults.length)} 个方向 · 成功 ${agentText(metadata.topic_success_count, "—")} / ${agentText(topicResults.length, "—")} · ${agentText(metadata.analysis_calls, "—")} 次独立调用 · 共列 ${agentText(metadata.research_candidate_count, "0")} 只` : "标准单阶段"} · 热榜 ${agentText(metadata.hot_stock_count, "0")} 条</div>`;
 }
 
 async function runNewsAgent() {
   if (state.newsAgentBusy) return;
+  const analysisMode = $("#newsAgentAnalysisMode").value;
   try {
     if (!state.newsAgentSettings) await loadNewsAgentSettings();
     if (!state.newsAgentSettings?.configured) {
@@ -568,21 +735,35 @@ async function runNewsAgent() {
       await openNewsAgentSettings();
       return;
     }
-    if (!state.radarLoaded) await loadRadar(false);
-    if (!state.news) throw new Error("资讯雷达尚未取得可分析的数据");
+    const userNews = $("#newsAgentUserNews").value.trim();
+    const includeRadar = $("#newsAgentIncludeRadar").checked;
+    if (!userNews && !includeRadar) throw new Error("请粘贴新闻内容，或勾选参考资讯雷达");
+    if (includeRadar && !state.radarLoaded) await loadRadar(false);
+    if (includeRadar && !state.news) throw new Error("资讯雷达尚未取得可分析的数据；也可取消雷达勾选后只分析粘贴内容");
     state.newsAgentBusy = true;
+    state.newsAgentDirectionPlan = null;
     $("#newsAgentRunButton").disabled = true;
-    $("#newsAgentRunButton").textContent = "关联分析中…";
-    $("#newsAgentResult").innerHTML = '<div class="agent-loading"><i></i><strong>Agent 正在建立新闻、股票与板块关联</strong><p>已提交当前筛选条件下的资讯，同时保留三大热榜前列股票。</p></div>';
+    $("#newsAgentRunButton").textContent = analysisMode === "deep" ? "方向发现中…" : "关联分析中…";
+    $("#newsAgentResult").innerHTML = `<div class="agent-loading"><i></i><strong>${analysisMode === "deep" ? "正在拆解全部产业利好、利空与受损方向" : "Agent 正在建立事件、板块与个股传导链"}</strong><p>${userNews ? "正在优先分析你粘贴的资讯" : "正在分析当前资讯雷达"}${includeRadar ? "，并参考热榜和自选股。" : "。"}${analysisMode === "deep" ? " 本阶段只做产业方向发现，不分析个股；完成后由你选择深挖方向。" : ""}</p></div>`;
+    const request = {
+      question: $("#newsAgentQuestion").value.trim(),
+      user_news: userNews,
+      include_radar: includeRadar,
+      analysis_mode: analysisMode === "deep" ? "discover" : "standard",
+      item_ids: includeRadar ? currentRadarItemIds() : [],
+    };
     const result = await api("/api/news-agent/analyze", {
       method: "POST",
-      body: JSON.stringify({
-        question: $("#newsAgentQuestion").value.trim(),
-        item_ids: currentRadarItemIds(),
-      }),
+      body: JSON.stringify(request),
     });
+    if (result?.metadata?.analysis_mode === "discover") {
+      state.newsAgentDirectionPlan = {
+        units: agentArray(result?.analysis?.analysis_units),
+        request: {...request, analysis_mode: "deep"},
+      };
+    }
     renderNewsAgentResult(result);
-    toast("资讯关联分析完成");
+    toast(analysisMode === "deep" ? "产业方向发现完成，请选择深挖方向" : "资讯关联分析完成");
   } catch (error) {
     $("#newsAgentResult").innerHTML = `<div class="agent-empty error"><strong>Agent 分析失败</strong><p>${escapeHtml(error.message)}</p><button class="button button-ghost" type="button" id="agentErrorSettingsButton">检查 API 设置</button></div>`;
     $("#agentErrorSettingsButton")?.addEventListener("click", openNewsAgentSettings);
@@ -590,7 +771,37 @@ async function runNewsAgent() {
   } finally {
     state.newsAgentBusy = false;
     $("#newsAgentRunButton").disabled = false;
-    $("#newsAgentRunButton").textContent = "分析当前资讯";
+    $("#newsAgentRunButton").textContent = analysisMode === "deep" ? "重新分析产业方向" : "开始标准分析";
+  }
+}
+
+async function runSelectedNewsAgent(explicitUnits = null) {
+  if (state.newsAgentBusy) return;
+  const plan = state.newsAgentDirectionPlan;
+  const units = explicitUnits || selectedNewsAgentUnits();
+  if (!plan?.request) { toast("资讯内容已变化，请重新分析产业方向", true); return; }
+  if (!units.length) { toast("请至少选择一个产业方向", true); return; }
+  try {
+    state.newsAgentBusy = true;
+    $("#newsAgentRunButton").disabled = true;
+    const selectedButton = $("#newsAgentResult").querySelector?.("#newsAgentAnalyzeSelectedButton");
+    if (selectedButton) selectedButton.disabled = true;
+    $("#newsAgentResult").innerHTML = `<div class="agent-loading"><i></i><strong>正在独立深挖 ${units.length} 个已选产业方向</strong><p>每个方向分别生成主攻、观察、超短情绪、四层板块梯队和剔除清单；单方向失败不会中断其他方向。</p></div>`;
+    const result = await api("/api/news-agent/analyze", {
+      method: "POST",
+      body: JSON.stringify({...plan.request, selected_units: units}),
+    });
+    state.newsAgentDirectionPlan = null;
+    renderNewsAgentResult(result);
+    toast(`已完成 ${units.length} 个产业方向的独立深挖`);
+  } catch (error) {
+    $("#newsAgentResult").innerHTML = `<div class="agent-empty error"><strong>Agent 深挖失败</strong><p>${escapeHtml(error.message)}</p><button class="button button-ghost" type="button" id="agentErrorSettingsButton">检查 API 设置</button></div>`;
+    $("#agentErrorSettingsButton")?.addEventListener?.("click", openNewsAgentSettings);
+    toast(error.message, true);
+  } finally {
+    state.newsAgentBusy = false;
+    $("#newsAgentRunButton").disabled = false;
+    $("#newsAgentRunButton").textContent = "重新分析产业方向";
   }
 }
 
@@ -1006,6 +1217,7 @@ async function openAnalysis(code, name) {
 }
 
 function bindEvents() {
+  $("#testNewsAgentButton").addEventListener("click", testNewsAgentConnection);
   $("#remoteButton").addEventListener("click", openRemoteSettings);
   $("#reloadConfigButton").addEventListener("click", reloadSharedConfig);
   $("#copyRemoteButton").addEventListener("click", async () => {
@@ -1030,6 +1242,13 @@ function bindEvents() {
   $("#radarSettingsButton").addEventListener("click", openRadarSettings);
   $("#newsAgentSettingsButton").addEventListener("click", openNewsAgentSettings);
   $("#newsAgentRunButton").addEventListener("click", runNewsAgent);
+  $("#newsAgentUserNews").addEventListener("input", () => {
+    $("#newsAgentUserNewsCount").textContent = String($("#newsAgentUserNews").value.length);
+    invalidateNewsAgentDirectionPlan();
+  });
+  $("#newsAgentQuestion").addEventListener("input", invalidateNewsAgentDirectionPlan);
+  $("#newsAgentIncludeRadar").addEventListener("change", invalidateNewsAgentDirectionPlan);
+  $("#newsAgentAnalysisMode").addEventListener("change", invalidateNewsAgentDirectionPlan);
   $("#radarSearch").addEventListener("input", renderRadar);
   $("#radarRelatedOnly").addEventListener("change", renderRadar);
   $("#radarSourceFilters").addEventListener("click", (event) => {

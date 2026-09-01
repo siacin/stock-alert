@@ -7,6 +7,7 @@
   <meta name="description" content="A 股自选股多数据源实时提醒控制台">
   <title>盘中哨兵 · 多源行情提醒</title>
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/market.css">
 </head>
 <body>
   <div class="ambient ambient-one"></div>
@@ -44,6 +45,9 @@
       </button>
       <button class="module-tab" type="button" data-view="news" aria-selected="false">
         <span>资讯雷达</span><small id="radarTabMeta">财经热点</small><i id="radarRelatedBadge" hidden>0</i>
+      </button>
+      <button class="module-tab" type="button" data-view="market" aria-selected="false">
+        <span>情绪与轮动</span><small>全市场 · 一级行业</small>
       </button>
     </nav>
 
@@ -170,6 +174,55 @@
     </footer>
     </div>
 
+    <section id="marketView" class="module-view" hidden aria-labelledby="marketTitle">
+      <div class="market-hero">
+        <div><p class="eyebrow">MARKET PULSE / SECTOR ROTATION</p><h2 id="marketTitle">市场情绪与板块轮动</h2>
+          <p>从全市场广度观察情绪，从一级行业强弱追踪轮动。与自选股监控独立运行。</p></div>
+        <div class="market-actions"><button id="marketRefresh" class="button button-ghost" type="button">刷新快照</button>
+          <button id="marketToggle" class="button button-primary" type="button">启动市场监控</button></div>
+      </div>
+      <div id="marketMonitorStatus" class="market-status" role="status">尚未采集。点击刷新快照，或启动连续监控。</div>
+      <form id="marketSettingsForm" class="market-settings">
+        <label>采集间隔<select id="marketInterval"><option value="30">30 秒</option><option value="60" selected>60 秒</option><option value="120">120 秒</option><option value="300">5 分钟</option></select></label>
+        <label>判断窗口<select id="marketLookback"><option value="5">5 分钟</option><option value="15">15 分钟</option><option value="30">30 分钟</option></select></label>
+        <label>连续确认<select id="marketConfirm"><option value="2">2 次</option><option value="3" selected>3 次</option><option value="4">4 次</option><option value="5">5 次</option></select></label>
+        <label>轮动排名变化<input id="marketRankJump" type="number" min="3" max="15" value="5" required></label>
+        <label class="market-check"><input id="marketAlerts" type="checkbox" checked>记录状态变化提醒</label>
+        <button class="button button-secondary" type="submit">保存设置</button><button id="marketReload" class="button button-ghost" type="button" hidden>放弃修改并载入最新</button>
+      </form>
+      <div class="market-overview">
+        <article class="market-card market-temperature"><span class="eyebrow">情绪温度 · 规则评分</span><div><strong id="marketScore">—</strong><span>/ 100</span></div><h3 id="marketCycle">等待数据</h3><p id="marketDelta">历史从首次启动开始积累</p><small>描述市场状态，不代表未来涨跌概率</small></article>
+        <div id="marketMetrics" class="market-metrics"><div class="market-card">全市场涨跌分布将在这里显示。</div></div>
+      </div>
+      <section class="market-card market-timeline"><div class="market-heading"><h3>日内情绪轨迹</h3><span>仅记录交易时段内、质量合格的新快照</span></div><div id="marketChart" class="market-chart">开始监控后积累轨迹，至少 5 分钟后判断方向。</div></section>
+      <div class="market-heading"><div><p class="eyebrow">SECTOR STRENGTH</p><h3>31 个一级行业</h3></div><span>涨跌幅排名 · 不混入概念及二、三级行业</span></div>
+      <div id="marketHeatmap" class="market-heatmap"><div class="market-card">等待行业数据</div></div>
+      <section id="marketLeaderSummary" class="market-card market-leader-summary">
+        <div class="market-heading"><div><p class="eyebrow">MARKET SPECULATION LEADER</p><h3>市场投机龙识别</h3></div><span>等待涨停池与连续快照</span></div>
+        <p class="market-muted">候选会在这里按市场空间、全市场带动、热榜辨识度、分歧生存和流动性分项展示。</p>
+      </section>
+      <section class="market-card market-ladder-panel">
+        <div class="market-heading"><div><p class="eyebrow">TOP 5 SECTOR LADDER</p><h3>强度前 5 · 板块梯队</h3></div><span>龙头 · 主攻方向 · 最早上板 · 最大封单 · 连板/首板/炸板</span></div>
+        <div id="marketSectorLadders" class="market-sector-ladders"><p class="market-muted">等待强度前 5 行业及涨停池数据。</p></div>
+        <p class="market-footnote">强度按一级行业当前涨跌幅排名。板块龙与市场投机龙分别评分，不用“最高板”直接代替。最早上板、封单额和连板高度来自同日专题股池；容量核心按行业成分股成交额，趋势核心按涨幅排序。首板身位会补抓个股与行业日线，区分低位补涨、高位反包、趋势加速和中位跟随；数据不足时显示“待核验”。</p>
+      </section>
+      <section class="market-card market-sector-panel">
+        <div class="market-heading"><h3>轮动观察</h3><div class="market-filters"><input id="marketSearch" type="search" placeholder="筛选行业名称" aria-label="筛选行业名称"><select id="marketSort" aria-label="行业排序"><option value="rank">涨跌幅排名</option><option value="rise">窗口排名上升</option><option value="fall">窗口排名下降</option><option value="amount">成交额占比</option></select></div></div>
+        <div class="market-table-wrap"><table class="market-table"><thead><tr><th>行业</th><th>涨跌幅</th><th>相对全市场</th><th>上涨占比</th><th>5 / 15 / 30 分钟名次变化</th><th>成交额占比</th><th>状态</th><th>领涨股</th></tr></thead><tbody id="marketSectorRows"><tr><td colspan="8">尚无快照</td></tr></tbody></table></div>
+        <p class="market-footnote">相对全市场 = 行业涨跌幅 − 有效 A 股样本等权平均涨跌幅；上涨占比不含平盘。成交额占比在这 31 个一级行业内计算，不是“主力净流入”。</p>
+      </section>
+      <div class="market-bottom-grid">
+        <section class="market-card"><div class="market-heading"><h3>市场提醒</h3><span>确认后记录 · 同类冷却 10 分钟</span></div><div id="marketEvents" class="market-events" aria-live="polite">暂无提醒</div></section>
+        <section class="market-card"><div class="market-heading"><h3>数据质量与口径</h3></div><div id="marketQuality">尚未请求免费接口</div></section>
+      </div>
+      <details class="market-card market-method"><summary>如何判断情绪与轮动？</summary>
+        <p>情绪评分 = 50 + 30 × (上涨−下跌)/有效样本数 + 15 × 截断(涨跌幅中位数/2%, −1, 1) + 5 × (涨幅≥3%家数−跌幅≥3%家数)/有效样本数。分数与窗口变化组合为低位修复、升温、高位分歧、退潮、震荡等观察标签，不强制假设行情按固定周期演进。</p>
+        <p>轮动提醒要求排名变化达到设定值、相对强度变化至少 0.5 个百分点，同时上涨占比≥55%（走强）或≤45%（走弱），并连续多次确认。旧时间戳、缺页、覆盖不足、午休、非交易时段不会产生新提醒。股池为东方财富专题口径，可能不含 ST、科创板及部分新股，仅作辅助，不计入评分。</p>
+        <p>强度前 5 板块会交叉匹配行业成分股、涨停池和炸板池：情绪龙优先看连板高度、首次封板时间和封单额，容量核心看成交额，主攻方向统计板块内封板股所属细分行业。首板价格身位参考封板前5/10日涨幅、行业指数超额、距20日高点和近10日估算涨停记忆：低位且当日封板确认归入“低位补涨”，近期断板后再封归入“高位反包”，封板前已持续走强归入“趋势加速”。免费行情没有实时性保证；计算和采集耗时会使实际间隔长于设置值。</p>
+        <p>板块龙评分由板块带动代理、事件身位、逻辑关联、封板质量、分歧承接、流动性和历史记忆组成；市场投机龙另看市场空间、全市场带动代理、跨平台热度、分歧生存、流动性与独立辨识度。连续快照会观察个股封板、回封或炸板之后板块和全市场的响应；少于 2 次事件响应时只显示候选，达到阈值才标“已确认”。免费轮询不是逐笔或盘口数据，因此“带动”是时间先后代理，不是因果证明。</p>
+      </details>
+    </section>
+
     <section id="newsView" class="module-view news-view" hidden aria-labelledby="radarTitle">
       <div class="radar-hero">
         <div>
@@ -208,17 +261,26 @@
             <div><span class="eyebrow">NEWS RELATION AGENT</span><h3 id="newsAgentTitle">资讯关联 Agent</h3></div>
             <span id="newsAgentConfigState" class="agent-config-state">API 未配置</span>
           </div>
-          <p>把当前资讯、热榜股票和自选股交给模型，分析“新闻 → 股票/板块”与“热股 → 新闻驱动”的关系。</p>
+          <p>粘贴新闻、公告或政策原文，按“事件 → 板块 → 个股 → 验证条件”做分层研究；也可同时参考当前资讯、热榜和自选股。</p>
+          <label class="agent-question-label agent-news-label">粘贴待分析资讯（可选）
+            <textarea id="newsAgentUserNews" rows="6" maxlength="16000" placeholder="粘贴新闻标题、正文、公告摘要或政策内容。内容会发送给你配置的模型服务商；不要粘贴账号、密钥等敏感信息。"></textarea>
+            <small><span id="newsAgentUserNewsCount">0</span> / 16000 字符 · 用户输入未经软件独立核验</small>
+          </label>
           <label class="agent-question-label">你的分析要求
-            <textarea id="newsAgentQuestion" rows="3" placeholder="例如：重点分析机器人、医药和地产新闻，找出与当前热榜股票的关联，并标注利好或利空。"></textarea>
+            <textarea id="newsAgentQuestion" rows="2" maxlength="1200" placeholder="可选，例如：重点区分直接受益与情绪映射，按短线和中期分别分析。"></textarea>
+          </label>
+          <label class="agent-context-toggle"><input id="newsAgentIncludeRadar" type="checkbox" checked><span>同时参考当前资讯雷达、三大热榜和自选股</span></label>
+          <label class="agent-mode-label">分析强度
+            <select id="newsAgentAnalysisMode"><option value="deep" selected>深度研究（先选方向，再逐项深挖）</option><option value="standard">标准分析（一次调用，更快）</option></select>
+            <small>深度研究先完整拆出产业利好、利空和受损方向，由你任意选择一个、多个或全部方向；每个选中方向独立分析，一个失败不会拖垮其他结果。</small>
           </label>
           <div class="news-agent-actions">
             <button id="newsAgentSettingsButton" class="button button-ghost" type="button">API 设置</button>
-            <button id="newsAgentRunButton" class="button button-primary" type="button">分析当前资讯</button>
+            <button id="newsAgentRunButton" class="button button-primary" type="button">分析产业方向</button>
           </div>
         </div>
         <div id="newsAgentResult" class="news-agent-result">
-          <div class="agent-empty"><span></span><strong>等待分析</strong><p>配置兼容 API 后，Agent 会在这里给出关联板块、个股和证据新闻。</p></div>
+          <div class="agent-empty"><span></span><strong>等待分析</strong><p>深度模式先拆出全部产业方向；选择方向后，再给出主攻、观察、超短情绪、板块梯队和排除理由。</p></div>
         </div>
       </section>
 
@@ -369,23 +431,29 @@
         <div><span class="eyebrow">LOCAL AGENT CONNECTION</span><h2>资讯 Agent API 设置</h2></div>
         <button class="icon-button" value="cancel" formnovalidate aria-label="关闭">×</button>
       </div>
-      <label>API 完整地址
-        <input id="newsAgentApiUrl" type="url" placeholder="https://api.example.com/v1/chat/completions" required>
-        <small class="field-help">支持 OpenAI 兼容 Chat Completions，也支持以 /responses 结尾的 Responses 接口。</small>
+      <label>API 基础地址或完整地址
+        <input id="newsAgentApiUrl" type="url" placeholder="https://api.example.com 或 https://api.example.com/v1" required>
+        <small class="field-help">域名自动补全 /v1/chat/completions；/v1 等基础路径补全 /chat/completions。完整 /chat/completions、/responses 地址保持不变。</small>
       </label>
       <div class="form-grid agent-settings-grid">
         <label>模型<input id="newsAgentModel" maxlength="120" placeholder="例如 gpt-5-mini" required></label>
-        <label>请求超时（秒）<input id="newsAgentTimeout" type="number" min="10" max="180" step="5" required></label>
+        <label>请求超时（秒）<input id="newsAgentTimeout" type="number" min="10" max="300" step="5" required></label>
         <label>单次资讯上限<input id="newsAgentMaxNews" type="number" min="20" max="120" step="10" required></label>
-        <label>Temperature<input id="newsAgentTemperature" type="number" min="0" max="1.5" step="0.1" required></label>
+        <label>Temperature（留空不发送）<input id="newsAgentTemperature" type="number" min="0" max="1.5" step="0.1"></label>
+        <label>响应模式<select id="newsAgentStreamMode"><option value="auto">自动兼容（优先流式）</option><option value="on">流式 SSE</option><option value="off">非流式 JSON</option></select></label>
+        <label>思考模式<select id="newsAgentThinkingMode"><option value="auto">自动（DeepSeek Flash 优先快速）</option><option value="disabled">关闭思考</option><option value="enabled">启用思考</option></select></label>
+        <label>最大输出 token<input id="newsAgentOutputLimit" type="number" min="256" max="393216" step="256" required><small>DeepSeek V4 Flash 官方最大 384K；第三方转发层可能另有限制。集合深度分析建议从 32768 起。</small></label>
       </div>
+      <p class="field-help">自动模式对 deepseek-v4-flash 关闭思考以减少等待，其他模型沿用服务商默认。显式思考开关需服务商支持。网关可能等待超过60秒，建议设置180秒；增大输出上限可能增加费用。</p>
       <label>API 密钥
         <input id="newsAgentApiKey" type="password" autocomplete="off" placeholder="留空则保持已保存密钥不变；本地接口可不填">
         <small id="newsAgentKeyHint" class="field-help">密钥只写入本机 data/news-agent.json，不会返回给网页或放入发布压缩包。</small>
       </label>
       <label class="agent-clear-key"><input id="newsAgentClearKey" type="checkbox"><span>删除已经保存在本机的 API 密钥</span></label>
+      <p id="newsAgentTestResult" class="field-help" role="status">测试仅发送固定短文字，不发送新闻或自选股、不保存设置，可能产生少量 API 费用。</p>
       <div class="modal-actions">
         <button class="button button-ghost" value="cancel" formnovalidate>取消</button>
+        <button id="testNewsAgentButton" class="button button-secondary" type="button">测试连接</button>
         <button id="saveNewsAgentSettingsButton" class="button button-primary" value="default">保存 API 设置</button>
       </div>
     </form>
@@ -430,5 +498,6 @@
   </dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="/app.js" defer></script>
+  <script src="/market.js" defer></script>
 </body>
 </html>
